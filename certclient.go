@@ -2,15 +2,17 @@ package main
 
 import (
 	"crypto/tls"
-    //"encoding/pem"
+   // "encoding/pem"
 	"fmt"
-	"net/http"
+	//"net/http"
 	"time"
 	"os"
     "sync"
    //"log"
+   "io/ioutil"
    "net"
 	"crypto/x509"
+    
     "crypto/rsa"
     "crypto/dsa"
     "crypto/ecdsa"
@@ -92,30 +94,7 @@ func PubKeyLen (v *x509.Certificate) int{
 }
 
 
-func get_protocols(servername string, rv chan string){
-    defer wg.Done()
-    var values string
-    for pname,prot :=range protocols{
-    client := &http.Client{
-      Transport: &http.Transport{
-	TLSClientConfig: &tls.Config{
-	  ServerName: servername,
-	  InsecureSkipVerify: true,
-	  MaxVersion:  prot,
-	  },
-	TLSHandshakeTimeout: 1000 * time.Millisecond,
-	},
-      }
-    resp, err := client.Get(servername)
-    if err != nil {
-	values += fmt.Sprintf("PRO:%v fail\n",pname,string(err.Error()))
-	continue
-      }
-    defer resp.Body.Close()
-    values += fmt.Sprintf("PRO:%v ok\n",pname)
-    }
-     rv <- values
-}
+
 
 
 func time_defs(nb,na time.Time) string{
@@ -135,17 +114,22 @@ func get_protocols_2(servername string, rv chan string) {
     var ov string
     defer wg.Done()
     for pname,prot :=range protocols{
-        fmt.Println("doing ",pname)
+        //fmt.Println("doing ",pname)
+        now := time.Now()
+        
         config := tls.Config{InsecureSkipVerify: true,
         MaxVersion:  prot,
         ServerName: servername,
         }
         connt, err := net.DialTimeout("tcp", servername, time.Second)
+        in2sec:= now.Add(time.Second*3)
         conn := tls.Client(connt,&config)
+        err = conn.SetDeadline(in2sec)
         err = conn.Handshake() 
-        fmt.Println("--->",conn.ConnectionState() )
+        
+        //fmt.Println("--->",conn.ConnectionState() )
         if err != nil {
-            ov += fmt.Sprintf("ver:%s fail\n" ,pname)
+            ov += fmt.Sprintf("ver:%s fail (%s)\n" ,pname,err.Error())
         }else{
         
         defer conn.Close()
@@ -154,7 +138,11 @@ func get_protocols_2(servername string, rv chan string) {
     rv <- ov
 }
 
-func get_cert(server string,rv chan string){
+
+
+
+
+func get_cert(server string,rv chan string, certpool *x509.CertPool ){
     defer wg.Done()
     var ca string
     var outs string
@@ -181,41 +169,49 @@ func get_cert(server string,rv chan string){
         ca += fmt.Sprintf("PKL:%d\n",PubKeyLen(v))
         ca += fmt.Sprintf("PKA:%s\n",pkalgs[int(v.PublicKeyAlgorithm)])        
         ca += fmt.Sprintf("sub:%s\n",(v.Subject))
-        ca += fmt.Sprintf("sig:%s\n",v.SignatureAlgorithm)
+        ca += fmt.Sprintf("SIG:%x\n",v.Signature)
+        ca += fmt.Sprintf("SIA:%s\n",v.SignatureAlgorithm)
         ca += fmt.Sprint(time_defs(v.NotBefore,v.NotAfter))
-        //r,_ :=pem.Decode(v.Raw     )
-        //ca += fmt.Sprintf("np :%X\n",r)
-
-    //fmt.Printf("%+v",v)
+        
+        // pemdata := pem.EncodeToMemory(
+            // &pem.Block{
+            // Type: "CERTIFICATE",
+            // Bytes: []byte(v.Raw         ),
+                // },
+        // )
+        
+        
+        // ca += fmt.Sprintf("IN cert POOL: %s\n", pemdata)
 	}
 	ca += fmt.Sprintf("vc :%x\n",state.VerifiedChains)
     ca += fmt.Sprintf("ver:%s\n",rev_protocols(state.Version))
     ca += fmt.Sprintf("cs :%s\n",strings.TrimSpace(cses[uint16(state.CipherSuite)]))
     ca += fmt.Sprintf("np :%s\n",state.NegotiatedProtocol)
-    
-    //fmt.Printf("%+v",v)
 	}
    rv <- ca
 }  
 
+
+
 func main() {
 
     servername := fmt.Sprintf("%s:%s",os.Args[1],os.Args[2])
-    //servicename := fmt.Sprintf("https://%s:%s",os.Args[1],os.Args[2])
+    certpool := x509.NewCertPool()
+
+    if(len(os.Args)>3){fmt.Println(os.Args[3])
+    dat, err := ioutil.ReadFile(os.Args[3])
+    if err==nil {certpool.AppendCertsFromPEM([]byte(dat))}
+    }
+ 
     pv := make(chan string)
     cc := make(chan string)
   
     fmt.Print(servername,"\n")
     wg.Add(2)
-    //go get_protocols(servicename,pv)
-     go get_protocols_2(servername,pv)
-     fmt.Println("done 1")
-    go get_cert(servername,cc)
-    fmt.Println("done 2")
+    go get_protocols_2(servername,pv)
+    go get_cert(servername,cc,certpool)
     prots := <-pv
-    fmt.Println("done 3")
     certs := <-cc
-    fmt.Println("done4 ")
     wg.Wait()
     fmt.Print(prots, certs)
     
