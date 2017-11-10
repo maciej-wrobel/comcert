@@ -2,22 +2,23 @@ package main
 
 import (
 	"crypto/tls"
-   // "encoding/pem"
+    "encoding/pem"
 	"fmt"
 	//"net/http"
 	"time"
 	"os"
     "sync"
-   //"log"
-   "io/ioutil"
-   "net"
+    //"log"
+    "io/ioutil"
+    "net"
 	"crypto/x509"
-    
+ //"encoding/json"    
     "crypto/rsa"
     "crypto/dsa"
     "crypto/ecdsa"
-    "golang.org/x/crypto/ocsp"    
+    //"golang.org/x/crypto/ocsp"    
     "strings"
+    "regexp"
     )
   
 var wg sync.WaitGroup
@@ -71,7 +72,7 @@ func rev_protocols(p uint16) string{
 
 
 func PubKeyLen (v *x509.Certificate) int{
-    defer wg.Done()
+    //defer wg.Done()
      p := int(v.PublicKeyAlgorithm)
      //fmt.Println("protocol",p)
      var rsc int
@@ -100,40 +101,47 @@ func PubKeyLen (v *x509.Certificate) int{
 func time_defs(nb,na time.Time) string{
     ca := ""
     now := time.Now()
-    ca += fmt.Sprintf("TNN:%s\n",now)
-    ca += fmt.Sprintf("TNB:%s\n",nb)
-    ca += fmt.Sprintf("TNA:%s\n",na)
-    ca += fmt.Sprintf("TL:%v\n",(na.Sub(nb)).Hours()/24/365)
-    ca += fmt.Sprintf("TOO:%t\n",na.Before(now))
-    ca += fmt.Sprintf("TON:%t\n",nb.After(now))
-    ca += fmt.Sprintf("TEX:%v\n",na.Sub(now).Hours()/24)
+    ca += fmt.Sprintf(" TIME/NOW:%s\n",now)
+    ca += fmt.Sprintf(" TIME/NOT BEFORE:%s\n",nb)
+    ca += fmt.Sprintf(" TIME/NOT AFTER:%s\n",na)
+    ca += fmt.Sprintf(" TIME/LIFESPAN:%4.1f YEARS\n",(na.Sub(nb)).Hours()/24/365)
+    ca += fmt.Sprintf(" TIME/TOO OLD:%t\n",na.Before(now))
+    ca += fmt.Sprintf(" TIME/TOO NEW:%t\n",nb.After(now))
+    ca += fmt.Sprintf(" TIME/EXPIRE IN:%6.0f DAYS\n",na.Sub(now).Hours()/24)
    return ca
 }
 
-func get_protocols_2(servername string, rv chan string) {
-    var ov string
+func get_protocols_2(server string, rv chan string) {
     defer wg.Done()
+    var ov string
+    servername := strings.Split(server,":")[0]
     for pname,prot :=range protocols{
         //fmt.Println("doing ",pname)
         now := time.Now()
-        
+        in2sec:= now.Add(time.Second*1)
         config := tls.Config{InsecureSkipVerify: true,
         MaxVersion:  prot,
         ServerName: servername,
         }
-        connt, err := net.DialTimeout("tcp", servername, time.Second)
-        in2sec:= now.Add(time.Second*3)
+        //fmt.Println("connecting")
+        connt, err := net.DialTimeout("tcp", server, time.Second)
+        
+        if err != nil {
+            ov += fmt.Sprintf("PROTOCOL VERSION:%s fail (%s)\n" ,pname,err.Error())
+            continue
+        }
+        defer connt.Close()
         conn := tls.Client(connt,&config)
         err = conn.SetDeadline(in2sec)
-        err = conn.Handshake() 
-        
-        //fmt.Println("--->",conn.ConnectionState() )
+        err = conn.Handshake()
         if err != nil {
-            ov += fmt.Sprintf("ver:%s fail (%s)\n" ,pname,err.Error())
+            ov += fmt.Sprintf("PROTOCOL VERSION:%s fail\n" ,pname)
+            fmt.Printf("INFO:failed %s connection: %s\n",pname,err.Error())
+            continue
         }else{
         
         defer conn.Close()
-        ov += fmt.Sprintf("ver:%s ok\n" ,pname)
+        ov += fmt.Sprintf("PROTOCOL VERSION:%s ok\n" ,pname)
     }}
     rv <- ov
 }
@@ -144,49 +152,72 @@ func get_protocols_2(servername string, rv chan string) {
 
 func get_cert(server string,rv chan string, certpool *x509.CertPool ){
     defer wg.Done()
+    
+    secureRenegotiation := regexp.MustCompile("secureRenegotiation:(true|false)")
+	//fmt.Printf("%q\n", re.FindAllStringSubmatch("-ab-", -1))
+    
     var ca string
     var outs string
+    servername := strings.Split(server,":")[0]
     config := tls.Config{InsecureSkipVerify: true,
+    ServerName:servername,
     }
 	conn, err := tls.Dial("tcp", server, &config)
+    fmt.Println((conn.VerifyHostname(server)).Error())
 	if err != nil {
-		//log.Fatalf("client: dial: %s", err)
+		rv <- "ERR:Could not make SSL/TLS connection"
 	}else{
     
 	defer conn.Close()
-	outs += fmt.Sprintf("client: connected to: %s", conn.RemoteAddr())
+	outs += fmt.Sprintf("INFO: connected to: %s\n", conn.RemoteAddr())
 	state := conn.ConnectionState()
-    ocspr := conn.OCSPResponse()    
+    mr := fmt.Sprintf("%+v",conn)
+    //fmt.Printf("TUTEJ:%s" ,(mr))
+    ocspr := state.OCSPResponse                   
+    ca+= outs
+    ca += fmt.Sprintf("OCSP RESPONSE LEN:%d\n",len(ocspr))    
+    
+    //ca += fmt.Sprintf("STATE:%+v\n",state)   
+    ca += fmt.Sprintf("CERTIFICATE CHAIN LEN:%d\n",len(state.PeerCertificates))
+	//ca += fmt.Sprintf("vc :%x\n",state.VerifiedChains)
+    ca += fmt.Sprintf("NEGOTIATED PROTOCOL VERSION:%s\n",rev_protocols(state.Version))
+    ca += fmt.Sprintf("CIPHER SUITE :%s\n",strings.TrimSpace(cses[uint16(state.CipherSuite)]))
+    //ca += fmt.Sprintf("np :%s\n",state.NegotiatedProtocol)    
+    i := 0;
     for _, v := range state.PeerCertificates {
-        if err == nil{fmt.Sprint(err)}
-        if len(ocspr)>0{
-            ov, err := ocsp.ParseResponse(ocspr,v)
-            if err == nil {
-                ca += fmt.Sprintf("\n\nverified: %s end\n\n",ov.Status)
-            }
-        }
-        wg.Add(1)
-        ca += fmt.Sprintf("PKL:%d\n",PubKeyLen(v))
-        ca += fmt.Sprintf("PKA:%s\n",pkalgs[int(v.PublicKeyAlgorithm)])        
-        ca += fmt.Sprintf("sub:%s\n",(v.Subject))
-        ca += fmt.Sprintf("SIG:%x\n",v.Signature)
-        ca += fmt.Sprintf("SIA:%s\n",v.SignatureAlgorithm)
+        // if err == nil{fmt.Sprint(err)}
+        // if len(ocspr)>0{
+            // ov, err := ocsp.ParseResponse(ocspr,v)
+            // if err == nil {
+                // ca += fmt.Sprintf("\n\nverified: %s end\n\n",ov.Status)
+            // }
+        // }
+      //  wg.Add(1)
+        ca += fmt.Sprintf("SUBJECT (%d):%s\n",i,v.Subject.CommonName)
+        i += 1
+        ca += fmt.Sprintf(" ISSUER:%s\n",(v.Issuer.CommonName))
+        ca += fmt.Sprintf(" PUBLIC KEY LENGTH:%d\n",PubKeyLen(v))
+        ca += fmt.Sprintf(" PUBLIC KEY ALGORITHM:%s\n",pkalgs[int(v.PublicKeyAlgorithm)])        
+        
+        //ca += fmt.Sprintf("ISSUER SN:%+v\n",(v.Extensions))
+        //ca += fmt.Sprintf("SIG:%x\n",v.Signature)
+        ca += fmt.Sprintf(" SIGNATURE ALGORITHM:%s\n",v.SignatureAlgorithm)
+         ca += fmt.Sprintf(" OCSP SERVER:%s\n",v.OCSPServer)
+         ca += fmt.Sprintf(" EXT:%s\n",secureRenegotiation.FindString(mr))
         ca += fmt.Sprint(time_defs(v.NotBefore,v.NotAfter))
         
-        // pemdata := pem.EncodeToMemory(
-            // &pem.Block{
-            // Type: "CERTIFICATE",
-            // Bytes: []byte(v.Raw         ),
-                // },
-        // )
+        pemdata := pem.EncodeToMemory(
+            &pem.Block{
+            Type: "CERTIFICATE",
+            Bytes: []byte(v.Raw),
+                },
+        )
         
         
-        // ca += fmt.Sprintf("IN cert POOL: %s\n", pemdata)
+        ca += fmt.Sprintf(" PEM_CERT_LEN: %d\n", len(pemdata))
+
 	}
-	ca += fmt.Sprintf("vc :%x\n",state.VerifiedChains)
-    ca += fmt.Sprintf("ver:%s\n",rev_protocols(state.Version))
-    ca += fmt.Sprintf("cs :%s\n",strings.TrimSpace(cses[uint16(state.CipherSuite)]))
-    ca += fmt.Sprintf("np :%s\n",state.NegotiatedProtocol)
+
 	}
    rv <- ca
 }  
@@ -200,18 +231,26 @@ func main() {
 
     if(len(os.Args)>3){fmt.Println(os.Args[3])
     dat, err := ioutil.ReadFile(os.Args[3])
-    if err==nil {certpool.AppendCertsFromPEM([]byte(dat))}
+        if err==nil {certpool.AppendCertsFromPEM([]byte(dat))}
+    
+    //b,_ := pem.Decode([]byte(dat))
+    //cert, _:= x509.ParseCertificate(b.Bytes)
+    //fmt.Printf("---> %s, %x",cert.Subject,cert.Signature)
     }
- 
     pv := make(chan string)
     cc := make(chan string)
   
-    fmt.Print(servername,"\n")
-    wg.Add(2)
+    fmt.Print("TARGET SERVER:",servername,"\n")
+    wg.Add(1)
+    wg.Add(1)
     go get_protocols_2(servername,pv)
+    
+    
+    
+    
     go get_cert(servername,cc,certpool)
-    prots := <-pv
     certs := <-cc
+    prots := <-pv
     wg.Wait()
     fmt.Print(prots, certs)
     
