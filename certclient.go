@@ -12,6 +12,7 @@ import (
     "io/ioutil"
     "net"
 	"crypto/x509"
+    	"net/http"
  //"encoding/json"    
     "crypto/rsa"
     "crypto/dsa"
@@ -111,6 +112,47 @@ func time_defs(nb,na time.Time) string{
    return ca
 }
 
+
+
+func http_specific (server string, servername string) string{
+  
+    client := &http.Client{
+      Transport: &http.Transport{
+      DisableCompression: true,
+	TLSClientConfig: &tls.Config{
+	  ServerName: servername,
+	  InsecureSkipVerify: true,
+	  
+	  },
+	TLSHandshakeTimeout: 3 * time.Second,
+	},
+      }
+    
+    //resp, err := client.Head("https://"+server)
+    req, err := http.NewRequest("OPTIONS", "https://"+server, nil)
+    
+    if err != nil {
+	fmt.Printf("%v\n",err.Error())
+      }
+    req.Header.Add("Accept-Encoding", "deflate,gzip,compress")
+    resp, err := client.Do(req)
+    if err != nil {
+	fmt.Printf("ERR:%v\n",err.Error())
+      }else{
+    defer resp.Body.Close()
+
+    fmt.Printf("RESP: %+v\n",resp)
+    fmt.Printf("RESP STS: %+v\n",resp.Header["Strict-Transport-Security"])
+    fmt.Printf("RESP COM: %+v\n",resp.Header["Content-Encoding"])
+    fmt.Printf("RESP TRA: %+v\n",resp.Header["Transfer-Encoding"])
+    fmt.Printf("RESP Compression: %t\n",resp.Uncompressed)
+    //cnt, err := ioutil.ReadAll(resp.Body)
+    //fmt.Printf("RESP BODY: %s\n",cnt)
+    }
+   return ""
+
+}
+
 func get_protocols_2(server string, rv chan string) {
     defer wg.Done()
     var ov string
@@ -148,6 +190,34 @@ func get_protocols_2(server string, rv chan string) {
 
 
 
+func enum_cs(server string, service string) string {
+
+    var ov string
+    servername := strings.Split(server,":")[0]
+    var clist []uint16  
+    for cs,_ :=range cses{
+        clist[0] = cs
+        //fmt.Println("doing ",pname)
+        //now := time.Now()
+        //in2sec:= now.Add(time.Second*1)
+        config := tls.Config{InsecureSkipVerify: true,
+        CipherSuites : clist,
+        ServerName: servername,
+        }
+        //fmt.Println("connecting")
+        conn, err := tls.Dial("tcp", server, &config)
+    //fmt.Println((conn.VerifyHostname(server)).Error())
+        if err != nil {
+		ov += "ERR:Could not make SSL/TLS connection"
+        }else{
+    
+	
+        defer conn.Close()
+        ov += fmt.Sprintf("PROTOCOL VERSION:%s ok\n" ,cs)
+    }}
+    return ov
+}
+
 
 
 func get_cert(server string,rv chan string, certpool *x509.CertPool ){
@@ -163,7 +233,7 @@ func get_cert(server string,rv chan string, certpool *x509.CertPool ){
     ServerName:servername,
     }
 	conn, err := tls.Dial("tcp", server, &config)
-    fmt.Println((conn.VerifyHostname(server)).Error())
+    //fmt.Println((conn.VerifyHostname(server)).Error())
 	if err != nil {
 		rv <- "ERR:Could not make SSL/TLS connection"
 	}else{
@@ -225,10 +295,13 @@ func get_cert(server string,rv chan string, certpool *x509.CertPool ){
 
 
 func main() {
-
-    servername := fmt.Sprintf("%s:%s",os.Args[1],os.Args[2])
+    port := "443"
+    if (len(os.Args)>2){port = os.Args[2]}
+    servername := fmt.Sprintf("%s:%s",os.Args[1],port)
+    server := fmt.Sprintf("%s",os.Args[1])
     certpool := x509.NewCertPool()
-
+    http_specific(server,servername)
+    fmt.Println(enum_cs(server,servername))
     if(len(os.Args)>3){fmt.Println(os.Args[3])
     dat, err := ioutil.ReadFile(os.Args[3])
         if err==nil {certpool.AppendCertsFromPEM([]byte(dat))}
@@ -253,5 +326,5 @@ func main() {
     prots := <-pv
     wg.Wait()
     fmt.Print(prots, certs)
-    
+
 }	
