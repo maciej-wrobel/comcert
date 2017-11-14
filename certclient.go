@@ -1,29 +1,28 @@
 package main
 
 import (
-	"crypto/tls"
-	"encoding/pem"
-	"fmt"
-	//"net/http"
-	"os"
-	"sync"
-	"time"
-	//"log"
 	"bufio"
-	"crypto/x509"
-	"io/ioutil"
-	"net"
-	"net/http"
-	//"encoding/json"
 	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/rsa"
-	//"golang.org/x/crypto/ocsp"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"net"
+	"net/http"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 var wg sync.WaitGroup
+
+var programTimeStart time.Time
 
 var cses = map[uint16]string{
 	0x0005: "TLS_RSA_WITH_RC4_128_SHA               ",
@@ -57,13 +56,11 @@ var protocols = map[string]uint16{
 	"TLS1.2": 0x0303,
 }
 
-type PublicKeyAlgorithm int
-
 var pkalgs = map[int]string{
 	1: "RSA", 2: "DSA", 3: "ECDSA",
 }
 
-func rev_protocols(p uint16) string {
+func revProtocols(p uint16) string {
 	ov := "unknown"
 	for k, v := range protocols {
 		if v == p {
@@ -74,9 +71,7 @@ func rev_protocols(p uint16) string {
 }
 
 func PubKeyLen(v *x509.Certificate) int {
-	//defer wg.Done()
 	p := int(v.PublicKeyAlgorithm)
-	//fmt.Println("protocol",p)
 	var rsc int
 	switch p {
 	case 1:
@@ -89,11 +84,13 @@ func PubKeyLen(v *x509.Certificate) int {
 		}
 	case 3:
 		{
-			rsc = v.PublicKey.(*ecdsa.PublicKey).Y.BitLen()
-			//rscx:= v.PublicKey.(*ecdsa.PublicKey).X.BitLen()
-			//c := v.PublicKey.(*ecdsa.PublicKey).Curve.Params()
-			//fmt.Printf("%s (%i)\nX:%s\nY:%s\nP:%s\nN:%s\nB:%s\nGx, Gy:%s %s\n",c.Name,c.BitSize,rscx,rsc,c.P, c.N,
+			//rsc = v.PublicKey.(*ecdsa.PublicKey).Y.BitLen()
+			//rscx := v.PublicKey.(*ecdsa.PublicKey).X.BitLen()
+			c := v.PublicKey.(*ecdsa.PublicKey).Curve.Params()
+			//ecdsa are in cert of scotthelme.co.uk as of 2017-11-14
+			//fmt.Printf(" ECDSA parameters:%s (%d) X:%s\nY:%s\nP:%s\nN:%s\nB:%s\nGx, Gy:%s %s\n", c.Name, c.BitSize, rscx, rsc, c.P, c.N,
 			//c.B, c.Gx, c.Gy)
+			fmt.Printf(" ECDSA parameters:%s (%d)\n", c.Name, c.BitSize)
 		}
 	}
 	var i int = rsc
@@ -247,7 +244,7 @@ func get_cert(server string, rv chan string, certpool *x509.CertPool) {
 		//ca += fmt.Sprintf("STATE:%+v\n",state)
 		ca += fmt.Sprintf("CERTIFICATE CHAIN LEN:%d\n", len(state.PeerCertificates))
 		//ca += fmt.Sprintf("vc :%x\n",state.VerifiedChains)
-		ca += fmt.Sprintf("NEGOTIATED PROTOCOL VERSION:%s\n", rev_protocols(state.Version))
+		ca += fmt.Sprintf("NEGOTIATED PROTOCOL VERSION:%s\n", revProtocols(state.Version))
 		ca += fmt.Sprintf("CIPHER SUITE :%s\n", strings.TrimSpace(cses[uint16(state.CipherSuite)]))
 		ca += fmt.Sprintf("SCT ATTACHED :%t\n", len(state.SignedCertificateTimestamps) > 0)
 		//ca += fmt.Sprintf("np :%s\n",state.NegotiatedProtocol)
@@ -262,12 +259,12 @@ func get_cert(server string, rv chan string, certpool *x509.CertPool) {
 			// }
 			//  wg.Add(1)
 			ca += fmt.Sprintf("SUBJECT (%d):%s\n", i, v.Subject.CommonName)
-			i += 1
+			i++
 			ca += fmt.Sprintf(" ISSUER:%s\n", (v.Issuer.CommonName))
 			ca += fmt.Sprintf(" PUBLIC KEY LENGTH:%d\n", PubKeyLen(v))
 			ca += fmt.Sprintf(" PUBLIC KEY ALGORITHM:%s\n", pkalgs[int(v.PublicKeyAlgorithm)])
 
-			//ca += fmt.Sprintf("ISSUER SN:%+v\n",(v.Extensions))
+			//ca += fmt.Sprintf(" EXTENSIONS:%+v\n", (v.Extensions))
 			//ca += fmt.Sprintf("SIG:%x\n",v.Signature)
 			ca += fmt.Sprintf(" SIGNATURE ALGORITHM:%s\n", v.SignatureAlgorithm)
 			ca += fmt.Sprintf(" OCSP SERVER:%s\n", v.OCSPServer)
@@ -282,20 +279,47 @@ func get_cert(server string, rv chan string, certpool *x509.CertPool) {
 				},
 			)
 
-			ca += fmt.Sprintf(" PEM_CERT_LEN: %d\n", len(pemdata))
-
+			if showCertsPtr {
+				ca += fmt.Sprintf(" PEM_CERT_LEN: %s\n", (pemdata))
+			}
 		}
 
 	}
 	rv <- ca
 }
 
+func printAtExit() {
+	fmt.Println(time.Now().Sub(programTimeStart) / time.Millisecond)
+	if !unattended {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("press enter to end")
+		reader.ReadString('\n')
+		//fmt.Println(text)
+
+	}
+
+}
+
+var unattended bool
+var showCertsPtr bool
+
 func main() {
-	unattended := true
+	defer printAtExit()
+
+	unattendedPtr := flag.Bool("u", false, "unattended run")
+	tryCSPtr := flag.Bool("t", false, "try ciphersuites")
+	detectProtocolsPtr := flag.Bool("d", false, "detect protocols")
+	httpSpecificPtr := flag.Bool("http", true, "check http specific opts")
+	flag.BoolVar(&showCertsPtr, "s", false, "show certificates")
+	//showCertsPtr =
+
+	flag.Parse()
+	programTimeStart = time.Now()
+	unattended = *unattendedPtr
 	server := ""
 	endpoint := ""
-	if len(os.Args) == 1 {
-		unattended = false
+	remainingArgs := flag.Args()
+	if len(remainingArgs) == 0 {
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("provide server_address:port\n")
 		text, _ := reader.ReadString('\n')
@@ -304,19 +328,24 @@ func main() {
 		endpoint = strings.TrimSpace(text)
 	} else {
 		port := "443"
-		if len(os.Args) > 2 {
-			port = os.Args[2]
+		if len(remainingArgs) > 1 {
+			port = remainingArgs[1]
 		}
-		endpoint = fmt.Sprintf("%s:%s", os.Args[1], port)
-		server = fmt.Sprintf("%s", os.Args[1])
+		endpoint = fmt.Sprintf("%s:%s", remainingArgs[0], port)
+		server = fmt.Sprintf("%s", remainingArgs[0])
 
 	}
 	certpool := x509.NewCertPool()
-	http_specific(endpoint, server)
-	//fmt.Println(enum_cs(endpoint,server))
-	if len(os.Args) > 3 {
-		fmt.Println(os.Args[3])
-		dat, err := ioutil.ReadFile(os.Args[3])
+	if *httpSpecificPtr {
+		http_specific(endpoint, server)
+	}
+
+	if *tryCSPtr {
+		fmt.Println(enum_cs(endpoint, server))
+	}
+	if len(remainingArgs) > 3 {
+		fmt.Println(remainingArgs[3])
+		dat, err := ioutil.ReadFile(remainingArgs[3])
 		if err == nil {
 			certpool.AppendCertsFromPEM([]byte(dat))
 		}
@@ -325,25 +354,24 @@ func main() {
 		//cert, _:= x509.ParseCertificate(b.Bytes)
 		//fmt.Printf("---> %s, %x",cert.Subject,cert.Signature)
 	}
-	//pv := make(chan string)
+	//
 	cc := make(chan string)
 
 	fmt.Print("TARGET SERVER:", endpoint, "\n")
 	wg.Add(1)
-	//wg.Add(1)
-	//go get_protocols_2(endpoint, pv)
-
 	go get_cert(endpoint, cc, certpool)
 	certs := <-cc
-	//prots := <-pv
+
+	if *detectProtocolsPtr {
+		pv := make(chan string)
+		wg.Add(1)
+		go get_protocols_2(endpoint, pv)
+		prots := <-pv
+		defer fmt.Print(prots)
+	}
+
+	//
 	wg.Wait()
 	fmt.Print(certs)
-	if !unattended {
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("press enter to end\n")
-		text, _ := reader.ReadString('\n')
-		fmt.Println(text)
-
-	}
 
 }
