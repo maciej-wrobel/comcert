@@ -70,7 +70,7 @@ func revProtocols(p uint16) string {
 	return ov
 }
 
-func PubKeyLen(v *x509.Certificate) int {
+func pubKeyLen(v *x509.Certificate) int {
 	p := int(v.PublicKeyAlgorithm)
 	var rsc int
 	switch p {
@@ -84,20 +84,15 @@ func PubKeyLen(v *x509.Certificate) int {
 		}
 	case 3:
 		{
-			//rsc = v.PublicKey.(*ecdsa.PublicKey).Y.BitLen()
-			//rscx := v.PublicKey.(*ecdsa.PublicKey).X.BitLen()
 			c := v.PublicKey.(*ecdsa.PublicKey).Curve.Params()
-			//ecdsa are in cert of scotthelme.co.uk as of 2017-11-14
-			//fmt.Printf(" ECDSA parameters:%s (%d) X:%s\nY:%s\nP:%s\nN:%s\nB:%s\nGx, Gy:%s %s\n", c.Name, c.BitSize, rscx, rsc, c.P, c.N,
-			//c.B, c.Gx, c.Gy)
 			fmt.Printf(" ECDSA parameters:%s (%d)\n", c.Name, c.BitSize)
 		}
 	}
-	var i int = rsc
+	i := int(rsc)
 	return i
 }
 
-func time_defs(nb, na time.Time) string {
+func timeDefs(nb, na time.Time) string {
 	ca := ""
 	now := time.Now()
 	ca += fmt.Sprintf(" TIME/NOW:%s\n", now)
@@ -110,7 +105,7 @@ func time_defs(nb, na time.Time) string {
 	return ca
 }
 
-func http_specific(server string, servername string) string {
+func httpSpecific(server string, servername string) string {
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -148,7 +143,7 @@ func http_specific(server string, servername string) string {
 
 }
 
-func get_protocols_2(server string, rv chan string) {
+func getProtocols(server string, rv chan string) {
 	defer wg.Done()
 	var ov string
 	servername := strings.Split(server, ":")[0]
@@ -184,7 +179,7 @@ func get_protocols_2(server string, rv chan string) {
 	rv <- ov
 }
 
-func enum_cs(server string, service string) string {
+func enumCipherSuites(server string, service string) string {
 
 	var passv, failv string
 	servername := strings.Split(server, ":")[0]
@@ -214,7 +209,7 @@ func enum_cs(server string, service string) string {
 	return passv + failv
 }
 
-func get_cert(server string, rv chan string, certpool *x509.CertPool) {
+func getCert(server string, rv chan string, certpool *x509.CertPool) {
 	defer wg.Done()
 
 	secureRenegotiation := regexp.MustCompile("secureRenegotiation:(true|false)")
@@ -261,7 +256,7 @@ func get_cert(server string, rv chan string, certpool *x509.CertPool) {
 			ca += fmt.Sprintf("SUBJECT (%d):%s\n", i, v.Subject.CommonName)
 			i++
 			ca += fmt.Sprintf(" ISSUER:%s\n", (v.Issuer.CommonName))
-			ca += fmt.Sprintf(" PUBLIC KEY LENGTH:%d\n", PubKeyLen(v))
+			ca += fmt.Sprintf(" PUBLIC KEY LENGTH:%d\n", pubKeyLen(v))
 			ca += fmt.Sprintf(" PUBLIC KEY ALGORITHM:%s\n", pkalgs[int(v.PublicKeyAlgorithm)])
 
 			//ca += fmt.Sprintf(" EXTENSIONS:%+v\n", (v.Extensions))
@@ -270,7 +265,7 @@ func get_cert(server string, rv chan string, certpool *x509.CertPool) {
 			ca += fmt.Sprintf(" OCSP SERVER:%s\n", v.OCSPServer)
 			ca += fmt.Sprintf(" EXT:%s\n", secureRenegotiation.FindString(mr))
 			ca += fmt.Sprintf(" CRLDistributionPoints :%s\n", v.CRLDistributionPoints)
-			ca += fmt.Sprint(time_defs(v.NotBefore, v.NotAfter))
+			ca += fmt.Sprint(timeDefs(v.NotBefore, v.NotAfter))
 
 			pemdata := pem.EncodeToMemory(
 				&pem.Block{
@@ -337,11 +332,11 @@ func main() {
 	}
 	certpool := x509.NewCertPool()
 	if *httpSpecificPtr {
-		http_specific(endpoint, server)
+		httpSpecific(endpoint, server)
 	}
 
 	if *tryCSPtr {
-		fmt.Println(enum_cs(endpoint, server))
+		fmt.Println(enumCipherSuites(endpoint, server))
 	}
 	if len(remainingArgs) > 3 {
 		fmt.Println(remainingArgs[3])
@@ -359,13 +354,13 @@ func main() {
 
 	fmt.Print("TARGET SERVER:", endpoint, "\n")
 	wg.Add(1)
-	go get_cert(endpoint, cc, certpool)
+	go getCert(endpoint, cc, certpool)
 	certs := <-cc
 
 	if *detectProtocolsPtr {
 		pv := make(chan string)
 		wg.Add(1)
-		go get_protocols_2(endpoint, pv)
+		go getProtocols(endpoint, pv)
 		prots := <-pv
 		defer fmt.Print(prots)
 	}
