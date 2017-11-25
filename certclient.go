@@ -105,7 +105,7 @@ func timeDefs(nb, na time.Time) string {
 	return ca
 }
 
-func httpSpecific(server string, servername string) string {
+func HttpSpecific(server string, servername string) string {
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -143,7 +143,7 @@ func httpSpecific(server string, servername string) string {
 
 }
 
-func getProtocols(server string, rv chan string) {
+func GetProtocols(server string, rv chan string) {
 	defer wg.Done()
 	var ov string
 	servername := strings.Split(server, ":")[0]
@@ -179,7 +179,7 @@ func getProtocols(server string, rv chan string) {
 	rv <- ov
 }
 
-func enumCipherSuites(server string, service string) string {
+func EnumCipherSuites(server string, service string) string {
 
 	var passv, failv string
 	servername := strings.Split(server, ":")[0]
@@ -332,11 +332,11 @@ func main() {
 	}
 	certpool := x509.NewCertPool()
 	if *httpSpecificPtr {
-		httpSpecific(endpoint, server)
+		HttpSpecific(endpoint, server)
 	}
 
 	if *tryCSPtr {
-		fmt.Println(enumCipherSuites(endpoint, server))
+		fmt.Println(EnumCipherSuites(endpoint, server))
 	}
 	if len(remainingArgs) > 3 {
 		fmt.Println(remainingArgs[3])
@@ -360,7 +360,7 @@ func main() {
 	if *detectProtocolsPtr {
 		pv := make(chan string)
 		wg.Add(1)
-		go getProtocols(endpoint, pv)
+		go GetProtocols(endpoint, pv)
 		prots := <-pv
 		defer fmt.Print(prots)
 	}
